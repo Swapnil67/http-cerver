@@ -4,10 +4,13 @@
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
+#include <setjmp.h>
 
 #include <netinet/in.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+
+#include "sv.h"
 
 char response[] =
 "HTTP/1.1 200 OK\n"
@@ -23,8 +26,61 @@ char response[] =
 "</html>\n";
 
 
-int main(int argc, char *argv[]) {
+#define KILO 1024
+#define MEGA (1024 * KILO)
+#define GIGA (1024 * MEGA)
 
+#define REQUEST_BUFFER_CAPACITY (640 * KILO)
+
+char request_buffer[REQUEST_BUFFER_CAPACITY];
+
+jmp_buf handle_request_error;
+
+void http_error(int status_code, const char *message) {
+    (void) status_code;
+    fprintf(stderr, "%s\n", message);
+    longjmp(handle_request_error, 1);    
+}
+
+void handle_request(int fd) {
+    ssize_t request_buffer_size = read(fd, request_buffer, REQUEST_BUFFER_CAPACITY);
+    if(request_buffer_size == 0) http_error(400, "EOF");
+    if(request_buffer_size < 0) http_error(500, strerror(errno));
+
+    printf("request_buffer_size: %lu\n", request_buffer_size);
+
+    String_View buffer = {
+	.len = (size_t)request_buffer_size,
+	.data = request_buffer
+    };
+
+    String_View line = sv_chop_by_delim(&buffer, '\n');
+    if(!line.len) {
+	http_error(400, "Empty status line\n");
+    }
+
+    // String_View method = sv_chop_by_delim(&line, ' ');
+    // printf("#%.*s#\n", (int)method.len, method.data);
+    
+    
+    // while(buffer.len) {
+    // 	string_view line = sv_chop_by_delim(&buffer, '\n');
+    // 	line = sv_trim(line);
+    // 	if(line.len) {
+    // 	    // printf("len: %lu\n", line.len);
+    // 	    printf("#%.*s#\n", (int)line.len, line.data);
+    // 	}
+    // }
+
+    printf("\n");
+
+    char newline = '\n';
+    write(STDOUT_FILENO, &request_buffer, (size_t)request_buffer_size);
+    write(STDOUT_FILENO, &newline, 1);
+}
+
+
+int main(int argc, char *argv[]) {
     if(argc < 2) {
 	fprintf(stderr, "Usage: nodec <port>\n");
 	exit(1);
@@ -40,7 +96,7 @@ int main(int argc, char *argv[]) {
     }
     
     
-    printf("Hello Cerver\n");
+    // printf("Hello Cerver\n");
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     // printf("server_fd: %d\n", server_fd);
@@ -52,8 +108,15 @@ int main(int argc, char *argv[]) {
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
-    //server_addr.sin_family = AF_INET;
-    
+    server_addr.sin_family = AF_INET;
+
+    int enable = 1;
+    int set_reuse_addr = setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+    if(set_reuse_addr < 0) {
+	fprintf(stderr, "Failed to set SO_REUSEADDR option\n");
+	exit(1);
+    }
+
     // * htons
     // * Big Endian: MSB is stored first
     // * Little Endian: LSB is stored first
@@ -80,16 +143,19 @@ int main(int argc, char *argv[]) {
 	socklen_t client_addrlen = 0;
 	int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addrlen);
 	// printf("client_fd: %d\n", client_fd);
+	// printf("client_addr: %lu \n", sizeof(client_addr));	
 
 	if(client_fd < 0) {
 	    fprintf(stderr, "Could not accept connection. This is unacceptable! %s\n", strerror(errno));
 	    exit(1);
 	}
-
-	// printf("client_addr: %lu \n", sizeof(client_addr));
 	assert(client_addrlen == sizeof(client_addr));
 
-
+	if(setjmp(handle_request_error) == 0) {
+	    handle_request(client_fd);
+	}
+	printf("----------------------------\n");
+	
 	// * Write dummy response
 	// printf("response: %lu \n", sizeof(response));
 	ssize_t err = write(client_fd, response, sizeof(response));
