@@ -10,3 +10,6 @@ nodec
 auto-save-list
 tramp
 .\#*
+
+
+*.dSYM
