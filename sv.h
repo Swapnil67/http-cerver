@@ -8,6 +8,15 @@ typedef struct {
     const char *data;
 } String_View;
 
+
+static inline
+String_View cstr_as_sv(const char *cstr) {
+    return (String_View) {
+	.len = strlen(cstr),
+	.data = cstr,
+    };
+}
+
 static inline
 String_View sv_chop_by_delim(String_View *sv, char delim) {
     size_t i = 0;
@@ -62,6 +71,15 @@ String_View sv_trim_right(String_View sv) {
 static inline
 String_View sv_trim(String_View sv) {
     return sv_trim_right(sv_trim_left(sv));
+}
+
+static inline
+int sv_equal(String_View a, String_View b) {
+    if(a.len != b.len) {
+	return 0;
+    } else {
+	return memcmp(a.data, b.data, a.len) == 0;
+    }
 }
 
 #endif // * SV_H_

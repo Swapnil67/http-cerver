@@ -37,10 +37,27 @@ char request_buffer[REQUEST_BUFFER_CAPACITY];
 jmp_buf handle_request_error;
 
 void http_error(int status_code, const char *message) {
-    (void) status_code;
     fprintf(stderr, "%s\n", message);
-    longjmp(handle_request_error, 1);    
+    longjmp(handle_request_error, status_code);    
 }
+
+void write_response(int client_fd, int status_code) {
+    dprintf(client_fd,
+    "HTTP/1.1 %d TEST\n"
+    "Content-Type: text/html\n"
+    "\n"
+    "<html>"
+    "<head>"
+    "<title>Server responded with %d</title>"
+    "</head>"
+    "<body>"
+    "<h3>Server responded with %d</h3>"
+    "</body>"
+    "</html>\n",
+    status_code, status_code, status_code);
+}
+
+
 
 void handle_request(int fd) {
     ssize_t request_buffer_size = read(fd, request_buffer, REQUEST_BUFFER_CAPACITY);
@@ -56,22 +73,19 @@ void handle_request(int fd) {
 
     String_View line = sv_chop_by_delim(&buffer, '\n');
     if(!line.len) {
-	http_error(400, "Empty status line\n");
+	http_error(400, "Empty status line");
     }
 
-    // String_View method = sv_chop_by_delim(&line, ' ');
-    // printf("#%.*s#\n", (int)method.len, method.data);
-    
-    
-    // while(buffer.len) {
-    // 	string_view line = sv_chop_by_delim(&buffer, '\n');
-    // 	line = sv_trim(line);
-    // 	if(line.len) {
-    // 	    // printf("len: %lu\n", line.len);
-    // 	    printf("#%.*s#\n", (int)line.len, line.data);
-    // 	}
-    // }
+    String_View method = sv_chop_by_delim(&line, ' ');
+    if(!sv_equal(method, cstr_as_sv("GET"))) {
+	http_error(405, "Unknown method");
+    }
 
+    String_View path = sv_chop_by_delim(&line, ' ');
+    if(!sv_equal(path, cstr_as_sv("/"))) {	
+	http_error(405, "Unknown path");
+    }
+   
     printf("\n");
 
     char newline = '\n';
@@ -95,12 +109,7 @@ int main(int argc, char *argv[]) {
 	exit(1);
     }
     
-    
-    // printf("Hello Cerver\n");
-
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    // printf("server_fd: %d\n", server_fd);
-    
     if(server_fd < 0) {
 	fprintf(stderr, "Could not crate socket epicly %s\n", strerror(errno));
 	exit(1);
@@ -122,7 +131,6 @@ int main(int argc, char *argv[]) {
     // * Little Endian: LSB is stored first
     // * Converts from 'host byte order' to 'network byte order'
     // * Network Byte Order ==> Big Endian
-
     server_addr.sin_port = htons((uint16_t)port);
     int err = bind(server_fd, (struct sockaddr *) &server_addr, sizeof(server_addr));
     if(err != 0) {
@@ -142,26 +150,26 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_in client_addr;
 	socklen_t client_addrlen = 0;
 	int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addrlen);
-	// printf("client_fd: %d\n", client_fd);
-	// printf("client_addr: %lu \n", sizeof(client_addr));	
-
 	if(client_fd < 0) {
 	    fprintf(stderr, "Could not accept connection. This is unacceptable! %s\n", strerror(errno));
 	    exit(1);
 	}
 	assert(client_addrlen == sizeof(client_addr));
 
-	if(setjmp(handle_request_error) == 0) {
+	int status_code = setjmp(handle_request_error);
+	if(status_code == 0) {
 	    handle_request(client_fd);
+	    // * Write dummy response	   
+	    ssize_t err = write(client_fd, response, sizeof(response));	    
+	    if(err < 0) {		
+		fprintf(stderr, "Could not send data: %s\n", strerror(errno));		
+	    }	    
+	} else {
+	    write_response(client_fd, status_code);
 	}
+	    
 	printf("----------------------------\n");
 	
-	// * Write dummy response
-	// printf("response: %lu \n", sizeof(response));
-	ssize_t err = write(client_fd, response, sizeof(response));
-	if(err < 0) {
-	    fprintf(stderr, "Could not send data: %s\n", strerror(errno));
-	}
 
 	// * Close the client connection
 	err = close(client_fd);
